@@ -139,4 +139,20 @@ class NoteController extends Controller
             'X-Accel-Buffering' => 'no', 
         ]);
     }
+
+
+    public function generateTags(Note $note)
+    {
+        require_once app_path('Raw/TagGenerator.php');
+
+        $generator = new \TagGeneratorRaw();
+        $tags = $generator->generateTags($note);
+
+        $note->tags = $tags;
+        $note->save();
+        $notes = auth()->user()->notes()->latest()->get();
+        return Inertia::render('Dashboard', [
+            'notes' => $notes,
+        ]);
+    }
 }
