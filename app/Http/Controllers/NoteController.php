@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use GuzzleHttp\Client;
 
 class NoteController extends Controller
 {
@@ -75,68 +76,66 @@ class NoteController extends Controller
 
         if (!$apiKey) {
             return response()->json(['error' => 'API key not configured'], 500);
-        }    
+        }
 
         return response()->stream(function () use ($note, $apiKey) {
             try {
-                $response = Http::withHeaders([
-                    'Authorization' => 'Bearer ' . $apiKey,
-                    'Content-Type' => 'application/json',
-                ])
-                ->withOptions(['stream' => true])
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => 'gpt-4.1-nano-2025-04-14',
-                    'messages' => [
-                        ['role' => 'system', 'content' => 'Summarize the following note concisely:'],
-                        ['role' => 'user', 'content' => $note->content],
+                $client = new Client();
+
+                $response = $client->post('https://api.openai.com/v1/chat/completions', [
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $apiKey,
+                        'Content-Type' => 'application/json',
+                    ],
+                    'json' => [
+                        'model' => 'gpt-4.1-nano-2025-04-14',
+                        'messages' => [
+                            ['role' => 'system', 'content' => 'Summarize the following note concisely:'],
+                            ['role' => 'user', 'content' => $note->content],
+                        ],
+                        'stream' => true,
+                        'temperature' => 0.7,
+                        'max_tokens' => 2048,
                     ],
                     'stream' => true,
-                    'temperature' => 0.7,
-                    'max_tokens' => 2048,
                 ]);
 
                 $stream = $response->getBody()->detach();
                 while (!feof($stream)) {
-                $line = fgets($stream);
-                $line = trim($line);
+                    $line = trim(fgets($stream));
 
-                if ($line === '' || !str_starts_with($line, 'data: ')) {
-                    continue;
+                    if ($line === '' || !str_starts_with($line, 'data: ')) {
+                        continue;
+                    }
+
+                    $data = substr($line, 6);
+
+                    if ($data === '[DONE]') {
+                        echo "data: [DONE]\n\n";
+                        ob_flush(); flush();
+                        break;
+                    }
+
+                    $json = json_decode($data, true);
+
+                    if (isset($json['choices'][0]['delta']['content'])) {
+                        $content = $json['choices'][0]['delta']['content'];
+                        echo "data: $content\n\n";
+                        ob_flush(); flush();
+                    }
                 }
 
-                $data = substr($line, 6);
-
-                if ($data === '[DONE]') {
-                    echo "data: [DONE]\n\n";
-                    flush();
-                    break;
-                }
-
-                $json = json_decode($data, true);
-
-                if (isset($json['choices'][0]['delta']['content'])) {
-                    $content = $json['choices'][0]['delta']['content'];
-                    echo "data: $content\n\n";
-                    flush();
-                }
-            }
-
-            fclose($stream);            
+                fclose($stream);
             } catch (\Throwable $e) {
-                Log::error('Streaming error', [
-                    'message' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
-                ]);
-
                 echo "data: " . json_encode("Error: " . $e->getMessage()) . "\n\n";
                 echo "data: [DONE]\n\n";
-                flush();
+                ob_flush(); flush();
             }
         }, 200, [
             'Content-Type' => 'text/event-stream',
             'Cache-Control' => 'no-cache',
             'Connection' => 'keep-alive',
-            'X-Accel-Buffering' => 'no', 
+            'X-Accel-Buffering' => 'no',
         ]);
     }
 
